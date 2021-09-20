@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log"
 	"os"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -42,8 +43,9 @@ func NewCloudTraceAPIClient() (*CloudTraceAPIClient, error) {
 	}, nil
 }
 
-func (api *CloudTraceAPIClient) ListTraces(ctx context.Context, serviceName string, startTime *timestamppb.Timestamp, endTime *timestamppb.Timestamp) chan *CloudTraceAPIResponse {
-	channel := make(chan *CloudTraceAPIResponse)
+func (api *CloudTraceAPIClient) ListTraces(ctx context.Context, serviceName string, startTime *timestamppb.Timestamp, endTime *timestamppb.Timestamp, limit int32, tags map[string]string) chan *CloudTraceAPIResponse {
+	defer recoverHandler()
+
 	var filters []string
 	if len(api.istioMeshId) != 0 {
 		filters = append(filters, "istio.mesh_id:" + api.istioMeshId)
@@ -56,6 +58,11 @@ func (api *CloudTraceAPIClient) ListTraces(ctx context.Context, serviceName stri
 			filters = append(filters, "istio.namespace:" + serviceNameTokens[1])
 		}
 	}
+	if tags != nil {
+		for k, v := range tags {
+			filters = append(filters, k + ":" + v)
+		}
+	}
 	if startTime == nil {
 		endTime = timestamppb.Now()
 		startTime = timestamppb.New(endTime.AsTime().Add(-24 * 1 * time.Hour))
@@ -66,29 +73,37 @@ func (api *CloudTraceAPIClient) ListTraces(ctx context.Context, serviceName stri
 		StartTime: startTime,
 		EndTime: endTime,
 		Filter: strings.Join(filters, " "),
+		PageSize: limit,
 	}
 	log.Printf("handle requests: %v", req)
+	channel := make(chan *CloudTraceAPIResponse)
 	go func() {
+		defer recoverHandler()
 		it := api.client.ListTraces(ctx, req)
+		i := int32(0)
 		for {
 			res, err := it.Next()
+			i++
 			if err != nil {
-				if err == iterator.Done {
-					close(channel)
-					break
-				} else {
+				if err != iterator.Done {
 					channel <- &CloudTraceAPIResponse{Error: err}
-					time.Sleep(1 * time.Second)
 				}
+				break
 			} else {
 				channel <- &CloudTraceAPIResponse{Trace: res}
 			}
+			if it.PageInfo().Remaining() == 0 && len(it.PageInfo().Token) == 0 || i == limit  {
+				break
+			}
 		}
+		close(channel)
 	}()
 	return channel
 }
 
 func (api *CloudTraceAPIClient) GetTrace(ctx context.Context, traceId string) *CloudTraceAPIResponse {
+	defer recoverHandler()
+
 	req := &pb.GetTraceRequest{
 		ProjectId: api.projectId,
 		TraceId: traceId,
@@ -96,4 +111,11 @@ func (api *CloudTraceAPIClient) GetTrace(ctx context.Context, traceId string) *C
 	log.Printf("handle requests: %v", req)
 	res, err := api.client.GetTrace(ctx, req)
 	return &CloudTraceAPIResponse{Error: err, Trace: res}
+}
+
+func recoverHandler() {
+	if r := recover(); r != nil {
+		log.Println("Recovered...", r)
+		debug.PrintStack()
+	}
 }

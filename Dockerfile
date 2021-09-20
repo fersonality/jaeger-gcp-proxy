@@ -11,6 +11,7 @@ COPY . ./
 RUN make build
 
 EXPOSE 9000
-ENV APP_PROFILE=dev
+ENV ISTIO_MESH_ID=proj-815946781175
+ENV GOOGLE_CLOUD_PROJECT=fersonality-1
 ENTRYPOINT ["/bin/bash", "-l", "-c"]
 CMD ["/workspace/build/server"]
