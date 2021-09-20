@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -31,7 +32,12 @@ func handleSearch(w http.ResponseWriter, req *http.Request) {
 		tags["istio.mesh_id"] = istioMeshId
 	}
 	if query.Has("service") {
-		tags["istio.canonical_service"] = query.Get("service")
+		// eg. serviceName = istio-ingressgateway.istio-system
+		serviceNameTokens := strings.Split(query.Get("service"), ".")
+		tags["istio.canonical_service"] = serviceNameTokens[0]
+		if len(serviceNameTokens) > 1 {
+			tags["istio.namespace"] = serviceNameTokens[1]
+		}
 	}
 
 	// calculate duration
